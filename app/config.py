@@ -23,7 +23,8 @@ class Settings(BaseSettings):
     
     # Security
     SECRET_KEY: str = "your-secret-key-change-in-production"
-    ALGORITHM: str = "HS256"
+    JWT_SECRET_KEY: str = "your-jwt-secret-key-change-in-production-min-32-chars"
+    JWT_ALGORITHM: str = "HS256"
     TOKEN_EXPIRY_HOURS: int = 24  # 24 hours token validity
     
     # CORS

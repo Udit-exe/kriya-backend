@@ -5,17 +5,26 @@ Phone-based authentication service built with FastAPI for Plane integration.
 ## Features
 
 - 📱 Phone number-based user registration
-- 🔐 Token-based authentication
+- 🔐 JWT-based authentication (stateless with revocation support)
 - 🔄 Automatic login for existing users
 - 🗄️ PostgreSQL database
 - 🚀 Fast and async with FastAPI
 - 🔒 Secure server-to-server communication with Plane
+- ✅ Token revocation support (logout functionality)
 
 ## Architecture
 
 ```
-User → Frontend → Kriya Backend (generates token) → Plane Backend (validates token) → Authenticated
+User → Frontend → Kriya Backend (generates JWT) → Plane Backend (validates JWT) → Authenticated
 ```
+
+**JWT Token Flow:**
+1. User registers/logs in → Kriya generates JWT token
+2. JWT contains: user_id, phone_number, token_version, expiration, issuer
+3. Plane validates JWT by calling Kriya
+4. Kriya decodes JWT, queries user by user_id (one DB query)
+5. Kriya checks token_version matches user.token_version (revocation)
+6. **No token storage in database!** - JWT is truly stateless
 
 ## Installation
 
@@ -46,15 +55,40 @@ cd kriya-backend
 pip install -r requirements.txt
 ```
 
-3. **Configure environment:**
+3. **Run database migration (add token_version column):**
 
 ```bash
-# Copy example env file
-cp .env.example .env
+# Option 1: Run migration SQL file
+psql -U postgres -d kriya_db -f migrations/add_token_version.sql
 
-# Edit .env with your settings
-nano .env
+# Option 2: Run manually
+psql -U postgres -d kriya_db -c "ALTER TABLE users ADD COLUMN IF NOT EXISTS token_version INTEGER NOT NULL DEFAULT 0;"
 ```
+
+3. **Configure environment:**
+
+Create a `.env` file in the `kriya-backend` directory with the following:
+
+```bash
+# Application
+DEBUG=True
+
+# Database
+DATABASE_URL=postgresql://postgres:postgres@localhost:5432/kriya_db
+
+# JWT Security (CHANGE IN PRODUCTION!)
+JWT_SECRET_KEY=your-jwt-secret-key-change-in-production-min-32-chars-recommended
+JWT_ALGORITHM=HS256
+TOKEN_EXPIRY_HOURS=24
+
+# Plane Integration
+PLANE_API_KEY=shared-secret-key-for-plane-kriya-communication
+
+# CORS
+ALLOWED_ORIGINS=http://localhost:3000,http://localhost:3001,http://localhost:8000
+```
+
+**Important:** Use a strong `JWT_SECRET_KEY` (minimum 32 characters recommended) in production!
 
 4. **Run the server:**
 
@@ -93,7 +127,7 @@ Register new user or login existing user with phone number.
 {
   "success": true,
   "message": "Registration successful",
-  "token": "kriya_8f7d9c2a-4b5e-11ef-9a3d-0242ac120002",
+  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoiMTIzZTQ1NjctZTg5Yi0xMmQzLWE0NTYtNDI2NjE0MTc0MDAwIiwicGhvbmVfbnVtYmVyIjoiKzEyMzQ1Njc4OTAiLCJleHAiOjE2OTk5OTk5OTksImlhdCI6MTY5OTkxMzU5OSwiaXNzIjoia3JpeWEtYXV0aCJ9.signature",
   "user": {
     "id": "uuid-here",
     "phone_number": "+1234567890",
@@ -105,6 +139,8 @@ Register new user or login existing user with phone number.
   "expires_at": "2024-11-10T10:30:00Z"
 }
 ```
+
+**Note:** The token is now a JWT (JSON Web Token) containing user information.
 
 ### 2. Validate Token
 
@@ -120,7 +156,7 @@ X-API-Key: shared-secret-key-for-plane-kriya-communication
 **Request:**
 ```json
 {
-  "token": "kriya_8f7d9c2a-4b5e-11ef-9a3d-0242ac120002"
+  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
 }
 ```
 
@@ -161,26 +197,42 @@ Invalidate user token.
 - first_name (String)
 - last_name (String)
 - email (String, Optional)
+- token_version (Integer) -- For JWT revocation ✅
 - created_at (DateTime)
 - updated_at (DateTime)
 ```
 
-### Tokens Table
+**How JWT Revocation Works:**
+- JWT contains `token_version` (e.g., 0)
+- When user logs out, increment `user.token_version` to 1
+- All old JWTs with version 0 become invalid
+- No need to store JWT strings in database! ✅
+
+### Tokens Table (Optional)
 ```sql
 - id (UUID, Primary Key)
 - user_id (UUID, Foreign Key → users.id)
-- token (String, Unique)
-- is_active (Boolean)
+- token (String) -- For audit logging only
 - expires_at (DateTime)
 - created_at (DateTime)
 ```
 
+**Note:** The tokens table is now **optional** and only used for audit logging. JWT validation does NOT require token storage!
+
 ## Security
 
+- **JWT Authentication**: Tokens are cryptographically signed and self-validating
 - **API Key Authentication**: Server-to-server endpoints require API key
-- **Token Expiry**: Tokens expire after configured hours (default: 24 hours)
+- **Token Expiry**: JWTs expire after configured hours (default: 24 hours)
+- **Token Revocation**: Revoked tokens tracked in database for logout functionality
 - **Phone Validation**: Basic phone number format validation
 - **CORS**: Configured allowed origins
+
+### JWT Security Benefits
+- ✅ **Stateless**: No database lookup needed for validation (except revocation check)
+- ✅ **Tamper-proof**: Cryptographically signed to prevent modification
+- ✅ **Industry standard**: Well-tested and widely adopted
+- ✅ **Performance**: Fast validation via signature verification
 
 ## Configuration
 
@@ -190,6 +242,8 @@ Key environment variables:
 |----------|-------------|---------|
 | `DATABASE_URL` | PostgreSQL connection string | `postgresql://...` |
 | `PORT` | Server port | `8001` |
+| `JWT_SECRET_KEY` | Secret key for JWT signing | Required (min 32 chars) |
+| `JWT_ALGORITHM` | JWT signing algorithm | `HS256` |
 | `TOKEN_EXPIRY_HOURS` | Token validity period | `24` |
 | `PLANE_API_KEY` | Shared secret with Plane | Required |
 | `ALLOWED_ORIGINS` | CORS allowed origins | `[]` |
@@ -210,12 +264,19 @@ pytest
 ## Production Deployment
 
 1. Set `DEBUG=False` in `.env`
-2. Use strong `SECRET_KEY` and `PLANE_API_KEY`
-3. Configure proper `DATABASE_URL`
-4. Use production WSGI server (uvicorn with workers):
+2. Use strong `JWT_SECRET_KEY` (minimum 32 characters, use random string)
+3. Use strong `PLANE_API_KEY` 
+4. Configure proper `DATABASE_URL`
+5. Use production WSGI server (uvicorn with workers):
 
 ```bash
 uvicorn app.main:app --host 0.0.0.0 --port 8001 --workers 4
+```
+
+**Generate Strong JWT Secret:**
+```python
+import secrets
+print(secrets.token_urlsafe(32))  # Generates a secure 32-byte secret
 ```
 
 ## Integration with Plane

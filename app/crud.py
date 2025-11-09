@@ -2,8 +2,10 @@
 CRUD operations for database models
 """
 import uuid
+import jwt
 from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
+from typing import Dict, Optional
 from . import models, schemas
 from .config import get_settings
 
@@ -45,53 +47,103 @@ def update_user(db: Session, user: models.User, user_data: schemas.UserRegisterR
     return user
 
 
-def generate_token() -> str:
-    """Generate a unique token"""
-    return f"kriya_{uuid.uuid4()}"
-
-
-def create_token(db: Session, user_id: uuid.UUID) -> models.Token:
-    """Create a new authentication token for user"""
-    token_string = generate_token()
+def generate_jwt_token(user: models.User) -> tuple[str, datetime]:
+    """
+    Generate a JWT token for user
+    Returns: (token_string, expires_at)
+    """
     expires_at = datetime.utcnow() + timedelta(hours=settings.TOKEN_EXPIRY_HOURS)
     
-    db_token = models.Token(
-        user_id=user_id,
-        token=token_string,
-        expires_at=expires_at,
-        is_active=True,
+    payload = {
+        "user_id": str(user.id),
+        "phone_number": user.phone_number,
+        "token_version": user.token_version,  # For revocation support
+        "exp": expires_at,
+        "iat": datetime.utcnow(),
+        "iss": "kriya-auth"  # Issuer
+    }
+    
+    token = jwt.encode(
+        payload,
+        settings.JWT_SECRET_KEY,
+        algorithm=settings.JWT_ALGORITHM
     )
-    db.add(db_token)
+    
+    return token, expires_at
+
+
+def decode_jwt_token(token: str) -> Optional[Dict]:
+    """
+    Decode and validate JWT token
+    Returns: payload dict if valid, None if invalid
+    """
+    try:
+        payload = jwt.decode(
+            token,
+            settings.JWT_SECRET_KEY,
+            algorithms=[settings.JWT_ALGORITHM],
+            options={"verify_signature": True, "verify_exp": True}
+        )
+        return payload
+    except jwt.ExpiredSignatureError:
+        return None
+    except jwt.InvalidTokenError:
+        return None
+
+
+def create_token(db: Session, user: models.User) -> tuple[str, datetime]:
+    """
+    Create a new JWT authentication token for user
+    No database storage needed - JWT is stateless!
+    Returns: (token_string, expires_at)
+    """
+    token_string, expires_at = generate_jwt_token(user)
+    return token_string, expires_at
+
+
+def validate_token_version(user: models.User, token_version: int) -> bool:
+    """
+    Check if the token version in JWT matches the current user's version
+    If user logged out, token_version is incremented, invalidating old tokens
+    """
+    return user.token_version == token_version
+
+
+def logout_user(db: Session, user: models.User) -> None:
+    """
+    Logout user by incrementing token_version
+    This invalidates all existing tokens
+    """
+    user.token_version += 1
     db.commit()
-    db.refresh(db_token)
-    return db_token
+    db.refresh(user)
 
 
-def get_token(db: Session, token_string: str) -> models.Token | None:
-    """Get token by token string"""
-    return db.query(models.Token).filter(models.Token.token == token_string).first()
-
-
-def invalidate_token(db: Session, token: models.Token) -> None:
-    """Invalidate a token"""
-    token.is_active = False
-    db.commit()
-
-
-def invalidate_user_tokens(db: Session, user_id: uuid.UUID) -> None:
-    """Invalidate all tokens for a user"""
-    db.query(models.Token).filter(
-        models.Token.user_id == user_id,
-        models.Token.is_active == True
-    ).update({"is_active": False})
-    db.commit()
-
-
-def cleanup_expired_tokens(db: Session) -> int:
-    """Clean up expired tokens from database"""
-    result = db.query(models.Token).filter(
-        models.Token.expires_at < datetime.utcnow()
-    ).delete()
-    db.commit()
-    return result
+def get_user_from_jwt(db: Session, token: str) -> Optional[models.User]:
+    """
+    Extract user from JWT token and validate
+    Returns: User object if valid, None if invalid
+    """
+    # Decode JWT
+    payload = decode_jwt_token(token)
+    if not payload:
+        return None
+    
+    # Extract user_id and token_version
+    user_id = payload.get("user_id")
+    token_version = payload.get("token_version", 0)
+    
+    if not user_id:
+        return None
+    
+    # Get user from database
+    user = get_user_by_id(db, uuid.UUID(user_id))
+    if not user:
+        return None
+    
+    # Check if token version matches (revocation check)
+    if not validate_token_version(user, token_version):
+        return None
+    
+    return user
 

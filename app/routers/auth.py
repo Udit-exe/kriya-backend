@@ -44,13 +44,13 @@ async def register_user(
             user = crud.create_user(db, user_data)
             message = "Registration successful"
         
-        # Generate authentication token
-        token = crud.create_token(db, user.id)
+        # Generate JWT authentication token
+        token_string, expires_at = crud.create_token(db, user)
         
         return schemas.RegisterResponse(
             success=True,
             message=message,
-            token=token.token,
+            token=token_string,
             user=schemas.UserResponse(
                 id=str(user.id),
                 phone_number=user.phone_number,
@@ -59,7 +59,7 @@ async def register_user(
                 email=user.email,
                 created_at=user.created_at,
             ),
-            expires_at=token.expires_at,
+            expires_at=expires_at,
         )
         
     except Exception as e:
@@ -76,34 +76,18 @@ async def validate_token(
     _: bool = Depends(verify_api_key)
 ):
     """
-    Validate authentication token (called by Plane backend)
+    Validate JWT authentication token (called by Plane backend)
     
     Requires API key authentication via X-API-Key header
     """
     try:
-        # Get token from database
-        token = crud.get_token(db, request.token)
-        
-        if not token:
-            return schemas.ValidateTokenResponse(
-                valid=False,
-                message="Token not found"
-            )
-        
-        # Check if token is valid
-        if not token.is_valid:
-            return schemas.ValidateTokenResponse(
-                valid=False,
-                message="Token is expired or inactive"
-            )
-        
-        # Get user information
-        user = crud.get_user_by_id(db, token.user_id)
+        # Get and validate user from JWT
+        user = crud.get_user_from_jwt(db, request.token)
         
         if not user:
             return schemas.ValidateTokenResponse(
                 valid=False,
-                message="User not found"
+                message="Invalid or expired token"
             )
         
         return schemas.ValidateTokenResponse(
@@ -132,19 +116,13 @@ async def get_user_info(
     db: Session = Depends(get_db)
 ):
     """
-    Get user information by token
+    Get user information by JWT token
     """
-    # Get and validate token
-    db_token = crud.get_token(db, token)
-    
-    if not db_token or not db_token.is_valid:
-        raise HTTPException(status_code=401, detail="Invalid or expired token")
-    
-    # Get user
-    user = crud.get_user_by_id(db, db_token.user_id)
+    # Get and validate user from JWT
+    user = crud.get_user_from_jwt(db, token)
     
     if not user:
-        raise HTTPException(status_code=404, detail="User not found")
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
     
     return schemas.UserResponse(
         id=str(user.id),
@@ -162,28 +140,19 @@ async def logout(
     db: Session = Depends(get_db)
 ):
     """
-    Logout user by invalidating token
+    Logout user by incrementing token_version
+    This invalidates all existing tokens for the user
     """
-    db_token = crud.get_token(db, token)
+    # Get user from JWT
+    user = crud.get_user_from_jwt(db, token)
     
-    if not db_token:
-        raise HTTPException(status_code=404, detail="Token not found")
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid token")
     
-    crud.invalidate_token(db, db_token)
+    # Increment token version to invalidate all tokens
+    crud.logout_user(db, user)
     
     return {"success": True, "message": "Logged out successfully"}
 
 
-@router.post("/cleanup-tokens")
-async def cleanup_expired_tokens(
-    db: Session = Depends(get_db),
-    _: bool = Depends(verify_api_key)
-):
-    """
-    Clean up expired tokens (maintenance endpoint)
-    
-    Requires API key authentication
-    """
-    count = crud.cleanup_expired_tokens(db)
-    return {"success": True, "message": f"Cleaned up {count} expired tokens"}
 
