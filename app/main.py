@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 
 from .config import get_settings
 from .database import create_tables
-from .routers import auth
+from .routers import auth, onboarding, tasks, plane_proxy, session, admin
 
 settings = get_settings()
 
@@ -16,13 +16,13 @@ settings = get_settings()
 async def lifespan(app: FastAPI):
     """Lifespan events - startup and shutdown"""
     # Startup
-    print("🚀 Starting Kriya Backend...")
-    print(f"📊 Creating database tables...")
+    print("Starting Kriya Backend...")
+    print(f"Creating database tables...")
     create_tables()
-    print(f"✅ Database initialized")
+    print(f"Database initialized")
     yield
     # Shutdown
-    print("👋 Shutting down Kriya Backend...")
+    print("Shutting down Kriya Backend...")
 
 
 # Create FastAPI app
@@ -44,6 +44,11 @@ app.add_middleware(
 
 # Include routers
 app.include_router(auth.router)
+app.include_router(onboarding.router)
+app.include_router(tasks.router)
+app.include_router(session.router)  # Session management for dashboard
+app.include_router(plane_proxy.router)  # API Gateway - proxies Plane requests
+app.include_router(admin.router)  # Admin endpoints for manual configuration
 
 
 @app.get("/")

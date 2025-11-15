@@ -3,7 +3,7 @@ Database models for Kriya Backend
 """
 import uuid
 from datetime import datetime
-from sqlalchemy import Column, String, DateTime, Boolean, Integer, ForeignKey
+from sqlalchemy import Column, String, DateTime, Boolean, Integer, ForeignKey, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 from .database import Base
@@ -20,6 +20,14 @@ class User(Base):
     last_name = Column(String(100), default="")
     email = Column(String(255), nullable=True)
     token_version = Column(Integer, default=0, nullable=False)  # For JWT revocation
+    
+    # Plane integration fields
+    plane_user_id = Column(String(255), nullable=True)  # Plane's user ID
+    plane_api_token = Column(Text, nullable=True)  # Cached Plane API token
+    plane_email = Column(String(255), nullable=True)  # Email used in Plane
+    plane_workspace_slug = Column(String(100), nullable=True)  # Default workspace
+    plane_project_id = Column(String(255), nullable=True)  # Default project
+    
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
     

@@ -61,13 +61,22 @@ class TokenResponse(BaseModel):
 
 
 class RegisterResponse(BaseModel):
-    """Schema for registration response"""
+    """Schema for registration response (for API use - includes token)"""
     
     success: bool = True
     message: str
     token: str
     user: UserResponse
     expires_at: datetime
+
+
+class RegisterResponseNoToken(BaseModel):
+    """Schema for registration response (for frontend - no token, uses session cookie)"""
+    
+    success: bool = True
+    message: str
+    user: UserResponse
+    redirect_path: Optional[str] = None  # Plane redirect URL if authentication succeeded
 
 
 class ValidateTokenRequest(BaseModel):

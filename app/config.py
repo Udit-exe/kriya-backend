@@ -19,7 +19,7 @@ class Settings(BaseSettings):
     PORT: int = 8001
     
     # Database
-    DATABASE_URL: str = "postgresql://postgres:postgres@localhost:5432/kriya_db"
+    DATABASE_URL: str = "postgresql://postgres:postgres@localhost:5433/kriya_db"
     
     # Security
     SECRET_KEY: str = "your-secret-key-change-in-production"
@@ -36,10 +36,15 @@ class Settings(BaseSettings):
     
     # Plane Backend Integration
     PLANE_API_KEY: str = "shared-secret-key-for-plane-kriya-communication"
+    PLANE_BACKEND_URL: str = "http://localhost:8000"
+    PLANE_SERVICE_TOKEN: str = ""  # Plane API token for service account
+    PLANE_WORKSPACE_SLUG: str = "default"  # Default workspace slug
+    PLANE_PROJECT_ID: str = ""  # Default project ID
     
     class Config:
         env_file = ".env"
         case_sensitive = True
+        extra = "ignore"  # Allow extra fields in .env file
 
 
 @lru_cache()
